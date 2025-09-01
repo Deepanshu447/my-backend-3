@@ -7,8 +7,13 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 const Message = require("./models/Message");
 
+const allowedOrigins = [
+  "http://localhost:5173",                            // local development
+  "https://chat-app-messenger.vercel.app/"         // production frontend
+];
+
 const app = express();
-app.use(cors({ origin: "http://localhost:5173", credentials: true }));
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 
 // MongoDB connection
 const mongoUri = process.env.MONGODB_URI;
@@ -40,7 +45,7 @@ mongoose.connection.on("error", (err) => {
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: "http://localhost:5173",
+        origin: allowedOrigins,
         methods: ["GET", "POST"],
         credentials: true,
     },
