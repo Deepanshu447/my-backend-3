@@ -9,7 +9,7 @@ const Message = require("./models/Message");
 
 const allowedOrigins = [
   "http://localhost:5173",                            // local development
-  "https://chat-app-messenger.vercel.app/"         // production frontend
+  "https://chat-app-messenger.vercel.app"         // production frontend
 ];
 
 const app = express();
