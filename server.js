@@ -11,7 +11,7 @@ const User = require("./models/User");
 const app = express();
 
 // Allow local + production
-const allowedOrigins = ["http://localhost:5173"];
+const allowedOrigins = ["https://chat-app-advance-five.vercel.app"];
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 
 // --- MongoDB connection ---
