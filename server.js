@@ -6,84 +6,140 @@ const { Server } = require("socket.io");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const Message = require("./models/Message");
-
-const allowedOrigins = [
-  "http://localhost:5173",                            // local development
-  "https://chat-app-messenger.vercel.app"         // production frontend
-];
+const User = require("./models/User");
 
 const app = express();
+
+// Allow local + production
+const allowedOrigins = ["http://localhost:5173"];
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 
-// MongoDB connection
+// --- MongoDB connection ---
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) {
-    console.error("❌ MONGODB_URI not set in .env file");
-    process.exit(1); // Exit if URI is missing
+  console.error("❌ MONGODB_URI not set in .env file");
+  process.exit(1);
 }
-console.log("Connecting to MongoDB URI:", mongoUri.replace(/:.*@/, ":*****@")); // Mask password
+
 mongoose
-    .connect(mongoUri, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 5000, // Fail faster if unreachable
-        connectTimeoutMS: 10000, // Shorter timeout for connection
-    })
-    .then(() => {
-        console.log("✅ Connected to MongoDB");
-        console.log("Database name:", mongoose.connection.name); // Should be "chatapp"
-    })
-    .catch((err) => {
-        console.error("❌ MongoDB connection error:", err);
-        process.exit(1); // Exit to catch issues early
-    });
+  .connect(mongoUri)
+  .then(() => console.log("✅ Connected to MongoDB"))
+  .catch((err) => {
+    console.error("❌ MongoDB connection error:", err);
+    process.exit(1);
+  });
 
-mongoose.connection.on("error", (err) => {
-    console.error("❌ MongoDB error:", err);
-});
-
+// --- HTTP + Socket.IO ---
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: {
-        origin: allowedOrigins,
-        methods: ["GET", "POST"],
-        credentials: true,
-    },
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
 });
 
+// --- Memory: track online users ---
+const onlineUsers = new Map(); // username -> socket.id
+
+// --- Socket.IO connection handler ---
 io.on("connection", async (socket) => {
-    const user = socket.handshake.query.user || "Anonymous";
-    console.log(`✅ ${user} connected`);
+  const username = socket.handshake.query.user;
+  if (!username) {
+    console.log("⚠️ Connection without username");
+    socket.disconnect(true); // <--- fix: close socket
+    return;
+  }
 
-    // Send message history to the new client
+  console.log(`✅ ${username} connected`);
+  onlineUsers.set(username, socket.id);
+
+  // --- Ensure user exists in DB ---
+  try {
+    await User.findOneAndUpdate(
+      { username },
+      { username },
+      { upsert: true, new: true }
+    );
+  } catch (err) {
+    console.error("❌ Error saving user in DB:", err);
+  }
+
+  // --- Broadcast online users ---
+  io.emit("online-users", Array.from(onlineUsers.keys()));
+
+  // --- Handle private messages ---
+  socket.on("private-message", async (msg) => {
+    const { sender, receiver, text } = msg; // <-- fixed: use receiver
+    if (!receiver || !sender || !text) return;
+
+    const payload = {
+      sender,
+      receiver,
+      text,
+      ts: new Date(),
+    };
+
     try {
-        const history = await Message.find().sort({ ts: 1 }).limit(50); // Fetch last 50 messages
-        socket.emit("history", history); // Send to this client only
+      // Save to DB
+      const saved = await Message.create(payload);
+
+      // Send to receiver if online
+      const receiverSocketId = onlineUsers.get(receiver);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("private-message", saved);
+      }
+
+      // Send to sender too (so both see same DB-synced object)
+      const senderSocketId = onlineUsers.get(sender);
+      if (senderSocketId) {
+        io.to(senderSocketId).emit("private-message", saved);
+      }
     } catch (err) {
-        console.error("❌ Error fetching history:", err);
+      console.error("❌ Error saving private message:", err);
     }
+  });
 
-    socket.on("message", async (msg) => {
-        const payload = {
-            sender: msg.sender || user,
-            text: msg.text,
-            ts: new Date(),
-        };
-        try {
-            const saved = await Message.create(payload);
-            console.log("💾 Saved to DB:"); // <--- already present
-            io.emit("message", saved);
-        } catch (err) {
-            console.error("❌ Error saving message:", err);
-        }
-    });
+  // --- Handle disconnect ---
+  socket.on("disconnect", () => {
+    onlineUsers.delete(username);
+    io.emit("online-users", Array.from(onlineUsers.keys()));
+    console.log(`❌ ${username} disconnected`);
+  });
+});
 
-    socket.on("disconnect", () => {
-        console.log(`❌ ${user} disconnected`);
-    });
+// --- REST endpoint: fetch all registered users ---
+app.get("/users", async (req, res) => {
+  try {
+    const users = await User.find({}, "username -_id").lean();
+    res.json(users.map((u) => u.username));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
+
+// --- REST endpoint: fetch conversation messages ---
+app.get("/messages", async (req, res) => {
+  const { user1, user2 } = req.query;
+  if (!user1 || !user2)
+    return res.status(400).json({ error: "user1 and user2 required" });
+
+  try {
+    const msgs = await Message.find({
+      $or: [
+        { sender: user1, receiver: user2 },
+        { sender: user2, receiver: user1 },
+      ],
+    }).sort({ ts: 1 });
+    res.json(msgs);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch messages" });
+  }
 });
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
