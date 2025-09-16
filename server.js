@@ -9,10 +9,19 @@ import authRoutes from "./routes/auth.js";
 import messageRoutes from "./routes/message.js";
 import { initSocket } from "./socket.js";
 
+const allowedOrigins = [
+  "https://team-x-chat-app.vercel.app",
+];
+
 dotenv.config();
 const app = express();
 
-app.use(cors());
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 app.use(authRoutes);
@@ -20,7 +29,11 @@ app.use(messageRoutes);
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: "*" },
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
 });
 
 initSocket(io);
