@@ -10,6 +10,7 @@ import messageRoutes from "./routes/message.js";
 import { initSocket } from "./socket.js";
 
 const allowedOrigins = [
+  "http://localhost:5173",
   "https://team-x-chat-app.vercel.app",
 ];
 
